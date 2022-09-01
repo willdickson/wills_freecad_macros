@@ -20,6 +20,8 @@ macro_list = os.listdir(source_dir)
 
 for filename in os.listdir(source_dir):
     basename, extname = os.path.splitext(filename)
+    if extname != '.py':
+        continue
     src_pathname =  os.path.abspath(os.path.join(source_dir, filename))
     dst_pathname = os.path.join(install_dir, f'{basename}.{macro_ext}')
     print(f'  {src_pathname} -> {dst_pathname}')

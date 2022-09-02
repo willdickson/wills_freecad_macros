@@ -1,5 +1,5 @@
 """
-RedoAliases.py 
+SyncSpreadsheetAliases.py 
 
 Simple macro which synchronizes the aliases in a spreadsheet after they
 they've been scrambled due to row/column insertion deletions. 

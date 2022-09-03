@@ -67,5 +67,3 @@ for a_cell in column_a_list:
 App.ActiveDocument.Spreadsheet.recompute()
 FreeCAD.Console.PrintMessage('done\n') 
 
-
-

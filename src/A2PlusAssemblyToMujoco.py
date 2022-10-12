@@ -15,6 +15,7 @@ import string
 import FreeCAD
 import xml.dom.minidom
 import xml.etree.ElementTree as ET
+import Mesh
 
 from PySide import QtGui
 from PySide import QtCore
@@ -36,24 +37,29 @@ def get_part_info():
     """
     Extracts part information, e.g., postion, rotation, source file.
     """
-    part_info_dict = {}
-    for part in App.ActiveDocument.findObjects('Part::FeaturePython'):
+    app_doc = App.ActiveDocument
+    gui_doc = FreeCADGui.getDocument(App.ActiveDocument.Name)
+    part_info = {}
+    for part in app_doc.findObjects('Part::FeaturePython'):
         p = part.Placement.Base
         q = part.Placement.Rotation
         axis = part.Placement.Rotation.Axis
         angle = part.Placement.Rotation.Angle
         _, src_file = os.path.split(part.sourceFile)
         name, _ = os.path.splitext(src_file)
-        part_info_dict[part.Label] = {
+        shape_color = gui_doc.getObject(part.Name).ShapeColor
+        part_info[part.Name] = {
                 'pos'        : p, 
                 'quat'       : q, 
                 'axis'       : axis,
                 'angle'      : angle,
+                'part_label' : part.Label,
                 'part_name'  : name, 
                 'part_file'  : src_file,
                 'part_obj'   : part,
+                'part_color' : shape_color,
                 }
-    return part_info_dict
+    return part_info
 
 
 def get_save_info():
@@ -88,20 +94,20 @@ def get_mesh_file(part_name):
     return mesh_file
 
 
-def create_mesh_files(part_info_dict, save_info):
+def create_mesh_files(part_info, save_info):
     """
-    Creates an stl file for each part in the part_info_dict and saves it to the
+    Creates an stl file for each part in the part_info and saves it to the
     sub-directory MESH_FILE_DIR of the saveto_dir in the save_info. 
     """
-    os.makedirs(save_info['mesh_dir'], exist_ok=True)
+    mesh_dir = save_info['mesh_dir']
+    os.makedirs(mesh_dir, exist_ok=True)
     msg = f'saving mesh files to: {mesh_dir}\n'
     FreeCAD.Console.PrintMessage(msg)
 
-    for item, data in part_info_dict.items():
+    for item, data in part_info.items():
         part_file = os.path.join(save_info['active_doc_dir'], data['part_file'])
         part_name = data['part_name']
         part_obj = data['part_obj']
-        mesh_dir = save_info['mesh_dir']
         mesh_file = os.path.join(mesh_dir, get_mesh_file(part_name))
         FreeCAD.Console.PrintMessage(f'saving:  {mesh_file}\n')
 
@@ -114,27 +120,94 @@ def create_mesh_files(part_info_dict, save_info):
         App.closeDocument(part_name)
 
 
-def create_mujoco_xml_file(part_info_dict, save_info):
+def create_mujoco_xml_file(part_info, save_info):
 
     # Create root element 
     root_elem = ET.Element('mujoco')
 
     # Add options
-    option_elem_attrib = {
+    option_attrib = {
             'gravity'  : '0 0 -1',
             'timestep' : '0.005',
             }
-    option_elem = ET.SubElement(root_elem, 'option', attrib=option_elem_attrib)
+    option_elem = ET.SubElement(root_elem, 'option', attrib=option_attrib)
 
     # Add assets
     asset_elem = ET.SubElement(root_elem, 'asset') 
-    for item, data in part_info_dict.items():
+    for item, data in part_info.items():
         part_name = data['part_name']
         mesh_file = os.path.join('.', MESH_FILE_DIR, get_mesh_file(part_name))
-        mesh_elem_attrib = {'file' : mesh_file}
-        mesh_elem = ET.SubElement(asset_elem, 'mesh', attrib=mesh_elem_attrib)
+        mesh_attrib = {'file' : mesh_file}
+        ET.SubElement(asset_elem, 'mesh', attrib=mesh_attrib)
 
-    # Add colors to assests
+    # Add material elements for colors 
+    color_list = list({data['part_color'] for item, data in part_info.items()})
+    for index, color in enumerate(color_list):
+        color_name = f'color_{index}'
+        color_vals = ' '.join([f'{val:1.2f}' for val in color])
+        color_attrib = {'name': color_name, 'rgba': color_vals} 
+        ET.SubElement(asset_elem, 'material', attrib=color_attrib)
+
+    # Create mapping from part keys to color names
+    part_to_color_name = {}
+    for item, data in part_info.items():
+        index = color_list.index(data['part_color'])
+        color_name = f'color_{index}'
+        part_to_color_name[item] = color_name
+
+    # Add texture and material elements for grid
+    grid_texture_attrib = { 
+            'name'    : 'grid',  
+            'type'    : '2d', 
+            'builtin' : 'checker',  
+            'width'   : '512',  
+            'height'  : '512',  
+            'rgb1'    : '0.1 0.2 0.3',  
+            'rgb2'    : '0.2 0.3 0.4',
+            }
+    ET.SubElement(asset_elem, 'texture', attrib=grid_texture_attrib)
+    grid_material_attrib = { 
+            'name'        : 'grid',  
+            'texture'     : 'grid',  
+            'texrepeat'   : '10 10',  
+            'texuniform'  : 'true',  
+            'reflectance' : '.2',
+            }
+    ET.SubElement(asset_elem, 'material', attrib=grid_material_attrib)
+
+    # Add worldbody element
+    worldbody_elem = ET.SubElement(root_elem, 'worldbody')
+
+    # Add floor
+    floor_attrib = { 
+            'name'     : 'floor', 
+            'size'     : '0 0 .05',  
+            'type'     : 'plane',  
+            'material' : 'grid',  
+            'condim'   : '3', 
+            }
+    ET.SubElement(worldbody_elem, 'geom', attrib=floor_attrib)
+
+    # Add light
+    # TODO:  use bounding boxes information to extract light positions
+    xvals, yvals, zvals = get_xyz_extent(part_info)
+    xmin, xmax = xvals
+    ymin, ymax = yvals
+    zmin, zmax = zvals
+    xpos = 0
+    ypos = 1.5*ymax
+    zpos = 1.5*zmax
+    cutoff = 2*max([xmax, ymax, zmax])
+    light_attrib = { 
+            'name'     : 'spotlight', 
+            'mode'     : 'targetbodycom', 
+            'target'   : 'base',  
+            'diffuse'  : '0.8 0.8 0.8',  
+            'specular' : '0.2 0.2 0.2',  
+            'pos'      : f'{xpos}, {ypos},{zpos}',
+            'cutoff'   : f'{cutoff}', 
+            }
+    ET.SubElement(worldbody_elem, 'light', attrib=light_attrib)
 
     # Save mujoco model to pretty printed xml file
     xml_str = ET.tostring(root_elem)
@@ -145,6 +218,22 @@ def create_mujoco_xml_file(part_info_dict, save_info):
         f.write(xml_str)
 
 
+def get_xyz_extent(part_info):
+    '''
+    Computs the min and max x, y and z values for all parts in the assembly.
+    '''
+    x_list = []
+    y_list = []
+    z_list = []
+    for item, data in part_info.items():
+        bbox = data['part_obj'].Shape.BoundBox
+        x_list.extend([bbox.XMin, bbox.XMax])
+        y_list.extend([bbox.YMin, bbox.YMax])
+        z_list.extend([bbox.ZMin, bbox.ZMax])
+    xvals = min(x_list), max(x_list)
+    yvals = min(y_list), max(y_list)
+    zvals = min(z_list), max(z_list)
+    return xvals, yvals, zvals
 
 
 
@@ -159,12 +248,13 @@ FreeCAD.Console.PrintMessage(msg)
 save_info = get_save_info()
 
 # Get list of part objects in assembly and extract information
-part_info_dict = get_part_info()
+part_info = get_part_info()
+#FreeCAD.Console.PrintMessage(part_info)
 
 # Create mesh files for all parts in the assembly
-#create_mesh_files(part_info_dict, save_info)
+#create_mesh_files(part_info, save_info)
 
-create_mujoco_xml_file(part_info_dict, save_info)
+create_mujoco_xml_file(part_info, save_info)
 
 
 

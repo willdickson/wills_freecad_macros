@@ -121,18 +121,54 @@ def create_mesh_files(part_info, save_info):
 
 
 def create_mujoco_xml_file(part_info, save_info):
+    """
+    Creates the mujoco xml file.
+    """
 
-    # Create root element 
+    # Create element tree  
     root_elem = ET.Element('mujoco')
+    add_compiler(root_elem, part_info)
+    add_options(root_elem, part_info)
+    add_assets(root_elem, part_info)
+    add_bodies(root_elem, part_info)
+    add_equalities(root_elem, part_info)
+    add_actuators(root_elem, part_info)
 
-    # Add options
+    # Save mujoco model to pretty printed xml file
+    xml_str = ET.tostring(root_elem)
+    xml_str = xml.dom.minidom.parseString(xml_str).toprettyxml(indent='  ')
+    save_dir = save_info['save_dir']
+    mujoco_file = os.path.join(save_dir, MUJOCO_MODEL_FILE)
+    with open(mujoco_file, 'w') as f:
+        f.write(xml_str)
+
+
+def add_compiler(root_elem, part_info):
+    """
+    Adds the compiler element to the elements tree
+    """
+    compiler_attrib = {
+            'coordinate' : 'global',
+            }
+    ET.SubElement(root_elem, 'compiler', attrib=compiler_attrib)
+
+
+def add_options(root_elem, part_info):
+    """
+    Adds the option element to the element tree
+    """
+
     option_attrib = {
             'gravity'  : '0 0 -1',
             'timestep' : '0.005',
             }
-    option_elem = ET.SubElement(root_elem, 'option', attrib=option_attrib)
+    ET.SubElement(root_elem, 'option', attrib=option_attrib)
 
-    # Add assets
+
+def add_assets(root_elem, part_info):
+    """
+    Adds the assets element and all sub elements to the element tree
+    """
     asset_elem = ET.SubElement(root_elem, 'asset') 
     for item, data in part_info.items():
         part_name = data['part_name']
@@ -175,6 +211,13 @@ def create_mujoco_xml_file(part_info, save_info):
             }
     ET.SubElement(asset_elem, 'material', attrib=grid_material_attrib)
 
+
+def add_bodies(root_elem, part_info):
+    """
+    Adds the top level worldbody element and all subelements to the element
+    tree.
+    """
+
     # Add worldbody element
     worldbody_elem = ET.SubElement(root_elem, 'worldbody')
 
@@ -209,19 +252,19 @@ def create_mujoco_xml_file(part_info, save_info):
             }
     ET.SubElement(worldbody_elem, 'light', attrib=light_attrib)
 
-    # Save mujoco model to pretty printed xml file
-    xml_str = ET.tostring(root_elem)
-    xml_str = xml.dom.minidom.parseString(xml_str).toprettyxml(indent='  ')
-    save_dir = save_info['save_dir']
-    mujoco_file = os.path.join(save_dir, MUJOCO_MODEL_FILE)
-    with open(mujoco_file, 'w') as f:
-        f.write(xml_str)
+
+def add_equalities(root_elem, part_info):
+    pass
+
+
+def add_actuators(root_elem, part_info):
+    pass
 
 
 def get_xyz_extent(part_info):
-    '''
+    """
     Computs the min and max x, y and z values for all parts in the assembly.
-    '''
+    """
     x_list = []
     y_list = []
     z_list = []
@@ -252,7 +295,7 @@ part_info = get_part_info()
 #FreeCAD.Console.PrintMessage(part_info)
 
 # Create mesh files for all parts in the assembly
-#create_mesh_files(part_info, save_info)
+create_mesh_files(part_info, save_info)
 
 create_mujoco_xml_file(part_info, save_info)
 

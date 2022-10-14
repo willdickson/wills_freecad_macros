@@ -12,13 +12,13 @@ locate, what kind of joints they are etc.
 """
 import os
 import string 
-import FreeCAD
 import xml.dom.minidom
 import xml.etree.ElementTree as ET
 import Mesh
-
+import FreeCAD
 from PySide import QtGui
 from PySide import QtCore
+
 
 __title__    = 'A2PlusAssemblyToMujoco'
 __author__   = 'Will Dickson'
@@ -32,7 +32,6 @@ MESH_FILE_DIR = 'mesh_files'
 MUJOCO_MODEL_FILE = 'model.xml'
 
 
-
 def get_part_info():
     """
     Extracts part information, e.g., postion, rotation, source file.
@@ -40,7 +39,7 @@ def get_part_info():
     app_doc = App.ActiveDocument
     gui_doc = FreeCADGui.getDocument(App.ActiveDocument.Name)
     part_info = {}
-    for part in app_doc.findObjects('Part::FeaturePython'):
+    for part in app_doc.findObjects(Type='Part::FeaturePython'):
         p = part.Placement.Base
         q = part.Placement.Rotation
         axis = part.Placement.Rotation.Axis
@@ -115,7 +114,7 @@ def create_mesh_files(part_info, save_info):
         FreeCAD.openDocument(part_file)
         App.setActiveDocument(part_name)
         doc = App.getDocument(part_name)
-        last_feature_obj = doc.findObjects("PartDesign::Feature")[-1]
+        last_feature_obj = doc.findObjects(Type="PartDesign::Feature")[-1]
         Mesh.export([last_feature_obj], mesh_file)
         App.closeDocument(part_name)
 
@@ -279,6 +278,44 @@ def get_xyz_extent(part_info):
     return xvals, yvals, zvals
 
 
+def get_joint_info():
+
+    joints_col_to_addr = get_joints_col_to_addr()
+    for col, addr_list in joints_col_to_addr.items():
+        if addr_list:
+            FreeCAD.Console.PrintMessage(f'{col} {addr_list}\n')
+
+
+def get_joints_col_to_addr():
+
+    # Get xml element tree containing sheet content remove  addresses
+    joints_sheet = App.ActiveDocument.findObjects(Label='JointsSpreadsheet')[0]
+    elem_tree = ET.fromstring(joints_sheet.cells.Content)
+
+    # Get list of addresses for all nonempty cells
+    all_addr = []
+    for addr in [c.attrib['address'] for c in elem_tree.findall('Cell')]: 
+        try:
+            joints_sheet.get(addr)
+            empty = False 
+        except ValueError:
+            empty = True 
+        if not empty:
+            all_addr.append(addr)
+
+    # Get dictionary which maps column letters to list of nonempty cells
+    # in that column. 
+    col_to_addr = {}
+    for col in list(string.ascii_uppercase):
+        r = re.compile(fr'^{col}\d*$')
+        col_to_addr[col] = list(filter(r.match, all_addr))
+    return col_to_addr
+
+
+
+
+
+
 
 
 # -----------------------------------------------------------------------------
@@ -292,12 +329,18 @@ save_info = get_save_info()
 
 # Get list of part objects in assembly and extract information
 part_info = get_part_info()
-#FreeCAD.Console.PrintMessage(part_info)
+
+if 0:
+    FreeCAD.Console.PrintMessage(part_info)
 
 # Create mesh files for all parts in the assembly
-create_mesh_files(part_info, save_info)
+if 0:
+    create_mesh_files(part_info, save_info)
 
-create_mujoco_xml_file(part_info, save_info)
+if 0:
+    create_mujoco_xml_file(part_info, save_info)
+
+get_joint_info()
 
 
 

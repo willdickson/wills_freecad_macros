@@ -11,7 +11,7 @@ locate, what kind of joint they are etc.
 
 """
 import os
-import re
+import yaml
 import string 
 import collections
 import xml.dom.minidom
@@ -88,18 +88,17 @@ def get_part_info():
         axis = part.Placement.Rotation.Axis
         angle = part.Placement.Rotation.Angle
         _, src_file = os.path.split(part.sourceFile)
-        name, _ = os.path.splitext(src_file)
+        base_name, _ = os.path.splitext(src_file)
         shape_color = gui_doc.getObject(part.Name).ShapeColor
-        part_info[part.Name] = {
+        part_info[part.Label] = {
                 'pos'        : p, 
                 'quat'       : q, 
                 'axis'       : axis,
                 'angle'      : angle,
-                'part_label' : part.Label,
-                'part_name'  : name, 
-                'part_file'  : src_file,
+                'src_file'   : src_file,
+                'base_name'  : base_name, 
                 'part_obj'   : part,
-                'part_color' : shape_color,
+                'color'      : shape_color,
                 }
     return part_info
 
@@ -131,8 +130,8 @@ def select_save_dir_dialog():
     return save_to_dir 
 
 
-def get_mesh_file(part_name):
-    mesh_file = f'{part_name}.stl'
+def get_mesh_file(base_name):
+    mesh_file = f'{base_name}.stl'
     return mesh_file
 
 
@@ -147,22 +146,22 @@ def create_mesh_files(part_info, save_info):
     fc_print(msg)
 
     for item, data in part_info.items():
-        part_file = os.path.join(save_info['active_doc_dir'], data['part_file'])
-        part_name = data['part_name']
+        part_file = os.path.join(save_info['active_doc_dir'], data['src_file'])
+        base_name = data['base_name']
         part_obj = data['part_obj']
-        mesh_file = os.path.join(mesh_dir, get_mesh_file(part_name))
+        mesh_file = os.path.join(mesh_dir, get_mesh_file(base_name))
         fc_print(f'saving:  {mesh_file}')
 
         # Open document and save .stl file
         FreeCAD.openDocument(part_file)
-        App.setActiveDocument(part_name)
-        doc = App.getDocument(part_name)
+        App.setActiveDocument(base_name)
+        doc = App.getDocument(base_name)
         last_feature_obj = doc.findObjects(Type="PartDesign::Feature")[-1]
         Mesh.export([last_feature_obj], mesh_file)
-        App.closeDocument(part_name)
+        App.closeDocument(base_name)
 
 
-def create_mujoco_xml_file(part_info, save_info):
+def create_mujoco_xml_file(part_info, save_info, mujoco_info):
     """
     Creates the mujoco xml file.
     """
@@ -170,54 +169,57 @@ def create_mujoco_xml_file(part_info, save_info):
     # Create element tree  
     root_elem = ET.Element('mujoco')
     ET.SubElement(root_elem, 'compiler', attrib=COMPILER_ATTRIB)
-    ET.SubElement(root_elem, 'option', attrib=OPTION_ATTRIB)
 
-    add_assets(root_elem, part_info)
-    add_bodies(root_elem, part_info)
-    add_equalities(root_elem, part_info)
-    add_actuators(root_elem, part_info)
+    add_option(root_elem, part_info, mujoco_info)
+    add_assets(root_elem, part_info, mujoco_info)
+    add_bodies(root_elem, part_info, mujoco_info)
+    add_equalities(root_elem, part_info, mujoco_info)
+    add_actuators(root_elem, part_info, mujoco_info)
 
     # Save mujoco model to pretty printed xml file
     xml_str = ET.tostring(root_elem)
     xml_str = xml.dom.minidom.parseString(xml_str).toprettyxml(indent='  ')
     save_dir = save_info['save_dir']
-    mujoco_file = os.path.join(save_dir, MUJOCO_MODEL_FILE)
-    with open(mujoco_file, 'w') as f:
+    mujoco_xml_file = os.path.join(save_dir, MUJOCO_MODEL_FILE)
+    with open(mujoco_xml_file, 'w') as f:
         f.write(xml_str)
 
+def add_option(root_elem, part_info, mujoco_info):
+    option_attrib = dict(OPTION_ATTRIB)
+    for k,v in mujoco_info['option'].items():
+        if type(v) == list:
+            option_attrib[k] = ' '.join([str(item) for item in v])
+        else:
+            option_attrib[k] = str(v) 
+    ET.SubElement(root_elem, 'option', attrib=option_attrib)
 
-def add_assets(root_elem, part_info):
+
+def add_assets(root_elem, part_info, mujoco_info):
     """
     Adds the assets element and all sub elements to the element tree
     """
     asset_elem = ET.SubElement(root_elem, 'asset') 
     for item, data in part_info.items():
-        part_name = data['part_name']
-        mesh_file = os.path.join('.', MESH_FILE_DIR, get_mesh_file(part_name))
+        base_name = data['base_name']
+        mesh_file = os.path.join('.', MESH_FILE_DIR, get_mesh_file(base_name))
         mesh_attrib = {'file' : mesh_file}
         ET.SubElement(asset_elem, 'mesh', attrib=mesh_attrib)
 
     # Add material elements for colors 
-    color_list = list({data['part_color'] for item, data in part_info.items()})
+    color_list = list({data['color'] for item, data in part_info.items()})
     for index, color in enumerate(color_list):
         color_name = f'color_{index}'
         color_vals = ' '.join([f'{val:1.2f}' for val in color])
         color_attrib = {'name': color_name, 'rgba': color_vals} 
         ET.SubElement(asset_elem, 'material', attrib=color_attrib)
 
-    # Create mapping from part keys to color names
-    part_to_color_name = {}
-    for item, data in part_info.items():
-        index = color_list.index(data['part_color'])
-        color_name = f'color_{index}'
-        part_to_color_name[item] = color_name
 
     # Add texture and material elements for grid
     ET.SubElement(asset_elem, 'texture', attrib=GRID_TEXTURE_ATTRIB)
     ET.SubElement(asset_elem, 'material', attrib=GRID_MATERIAL_ATTRIB)
 
 
-def add_bodies(root_elem, part_info):
+def add_bodies(root_elem, part_info, mujoco_info):
     """
     Adds the top level worldbody element and all subelements to the element
     tree.
@@ -242,14 +244,83 @@ def add_bodies(root_elem, part_info):
     light_attrib = dict(LIGHT_ATTRIB)
     light_attrib['pos'] = f'{xpos}, {ypos},{zpos}'
     light_attrib['cutoff'] = f'{cutoff}' 
-    ET.SubElement(worldbody_elem, 'light', attrib=LIGHT_ATTRIB)
+    worldbody_elem = ET.SubElement(worldbody_elem, 'light', attrib=LIGHT_ATTRIB)
+
+    root_mujoco_info = mujoco_info['worldbody']['body_tree']
 
 
-def add_equalities(root_elem, part_info):
+    # Develop - example of extracting placement vector from part
+    # -----------------------------------------------------------
+    root_label = root_mujoco_info['label']
+    root_src_file = part_info[root_label]['src_file']
+    root_part_file = os.path.join(save_info['active_doc_dir'], root_src_file)
+    root_base_name = part_info[root_label]['base_name']
+    root_world_point = root_mujoco_info['joint']['position']
+
+    FreeCAD.openDocument(root_part_file)
+    App.setActiveDocument(root_base_name)
+    doc = App.getDocument(root_base_name)
+    root_point_obj = doc.findObjects(Label=root_world_point)[0]
+    root_point_vector = point_obj.Placement.Base
+    App.closeDocument(root_base_name)
+    # -----------------------------------------------------------
+
+    label_to_color_name = get_label_to_color_name(part_info)
+
+    # Begin inner function -----------------------------------------------------
+
+    def add_body_to_tree(parent_elem, body_mujoco_info):
+        """
+        Adds the current, specified by body_mujoco_info, to the the parent 
+        element. 
+        """
+        label = body_mujoco_info['label']
+        body_part_info = part_info[label]
+    
+        # Create element for current body
+        body_attrib = {
+                'name' : label,
+                'pos'  : ' '.join([str(x) for x in body_part_info['pos']]),  
+                }
+        body_elem = ET.SubElement(parent_elem, 'body', attrib=body_attrib)
+    
+        # Add geom sub-element
+        geom_attrib = {
+                'name'     : f'{label}_mesh', 
+                'type'     : 'mesh', 
+                'mesh'     : body_part_info['base_name'], 
+                'material' : label_to_color_name[label], 
+                }
+        ET.SubElement(body_elem, 'geom', attrib=geom_attrib)
+    
+        # Add joint sub-element 
+        if body_mujoco_info['joint']['type'] == 'freejoint':
+            joint_attrib = {'name' : f'{label}_joint'}
+            ET.SubElement(body_elem, 'freejoint', attrib=joint_attrib)
+        else:
+            joint_attrib = {
+                    'name' : f'{label}_joint',
+                    'type' : body_mujoco_info['joint']['type'],
+                    }
+            ET.SubElement(body_elem, 'joint', attrib=joint_attrib)
+    
+        # If the body has children recurse into them
+        if 'children' in body_mujoco_info:
+            for child_mujoco_info in body_mujoco_info['children']:
+                add_body_to_tree(body_elem, child_mujoco_info)
+
+    # End inner function -------------------------------------------------------
+
+
+    add_body_to_tree(worldbody_elem, root_mujoco_info)
+    
+
+
+def add_equalities(root_elem, part_info, mujoco_info):
     pass
 
 
-def add_actuators(root_elem, part_info):
+def add_actuators(root_elem, part_info, mujoco_info):
     pass
 
 
@@ -271,162 +342,28 @@ def get_xyz_extent(part_info):
     return xvals, yvals, zvals
 
 
-def get_joint_info():
+def get_label_to_color_name(part_info):
+    """ 
+    Creates mapping from part label to color names
     """
-    Returns a dictionary (joint_info) containing the joint information
-    specified by the JointsSpreadsheet. 
+    color_list = list({data['color'] for item, data in part_info.items()})
+    label_to_color_name = {}
+    for item, data in part_info.items():
+        index = color_list.index(data['color'])
+        color_name = f'color_{index}'
+        label_to_color_name[item] = color_name
+    return label_to_color_name
+
+
+def load_mujoco_yaml_file():
     """
-    joint_sheet = App.ActiveDocument.findObjects(Label='JointSpreadsheet')[0]
-    col_to_addr = get_nonempty_addr_by_col(joint_sheet)
-
-    joint_info = {}
-    for a_addr in col_to_addr['A']:
-
-        index = get_cell_row(a_addr)
-        a_value = joint_sheet.get(a_addr)
-        a_cell_range = get_cell_data_range(a_addr, col_to_addr)
-
-        child_index = 0 
-        joint_info[a_value] = {'parent'   : {}, 'children' : []}
-
-        for b_addr in filter_by_row_range(col_to_addr['B'], *a_cell_range):
-            b_value = joint_sheet.get(b_addr)
-            b_cell_range = get_cell_data_range(b_addr, col_to_addr)
-
-            for c_addr in filter_by_row_range(col_to_addr['C'], *b_cell_range):
-                c_value = joint_sheet.get(c_addr)
-                row = get_cell_row(c_addr)
-                d_value = joint_sheet.get(f'D{row}')
-                if b_value.lower() == 'parent':
-                    joint_info[a_value]['parent'][c_value] = d_value
-                elif b_value.lower() == 'child':
-                    try:
-                        joint_info[a_value]['children'][child_index][c_value] = d_value
-                    except IndexError:
-                        joint_info[a_value]['children'].append({c_value: d_value})
-            if b_value.lower() == 'child':
-                child_index += 1
-
-    for k,v in joint_info.items():
-        fc_print(f'{k}, {v}')
-
-
-def filter_by_row_range(addr_list, min_row, max_row):
+    Loads extra data required for creating mujoco xml from the mujoco yaml
+    file. 
     """
-    Filter addr_list by 
-    """
-    filt_addr_list = []
-    for addr in addr_list:
-        row = get_cell_row(addr)
-        if row >= min_row and row <= max_row:
-            filt_addr_list.append(addr)
-    return filt_addr_list
-
-
-def get_cell_data_range(addr, col_to_addr):
-    """
-    Returns the data range to 
-
-    """
-    col = get_cell_col(addr)
-    if addr not in col_to_addr[col]:
-        # Cell is not in col_to_addr so it is empty and had no data range.
-        return None
-    data_range_start = get_cell_row(addr) + 1
-    min_row, max_row = get_min_and_max_row(col_to_addr)
-    addr_pos = col_to_addr[col].index(addr)
-    next_pos = addr_pos + 1 
-    if next_pos < len(col_to_addr[col]):
-        data_range_end = get_cell_row(col_to_addr[col][next_pos]) - 1
-    else:
-        data_range_end = max_row
-    return data_range_start, data_range_end
-    
-
-def get_row_list(col_to_addr):
-    """
-    Returns list of row indices for all addresses in col_to_addr. 
-    """
-    min_row, max_row = get_min_and_max_row(col_to_addr)
-    row_list = list(range(min_row, max_row))
-    return row_list
-
-
-def get_row_list(col_to_addr, col=None):
-    """
-    Get the list of row indices for all addresses in col_to_addr. Over all
-    indices col=None, or over specific column.
-    """
-    if col is None:
-        col_list = [k for k in col_to_addr]
-    else:
-        col_list = [col]
-    row_list = []
-    for col in col_list:
-            row_list.extend(list(map(get_cell_row, col_to_addr[col])))
-    return row_list
-
-
-def get_col_list(col_to_addr):
-    """
-    Return lists column letters found in col_to_addr.
-    """
-    return [k for k in col_to_addr]
-
-
-def get_min_and_max_row(col_to_addr, col=None):
-    """
-    Get the minimum and maximum rows for all addresss in col_to_addr (col=None)
-    or for a specific column (col=val).
-    """
-    row_list = get_row_list(col_to_addr, col=col)
-    min_row = min(row_list) 
-    max_row = max(row_list)
-    return min_row, max_row
-
-def get_cell_col(addr):
-    """
-    Returns the col of the cell given the cell's address string
-    """
-    return re.search(r'^[A-Z]*', addr)[0]
-
-
-def get_cell_row(addr):
-    """
-    Returns the row of the cell given the cell's address string.
-    """
-    return int(re.search(r'\d*$', addr)[0])
-
-
-def get_nonempty_addr_by_col(joint_sheet):
-    """
-    Returns an OrderedDict which gives a list of the nonempty sheet
-    cells for each column (A, B, C, D, etc. ) in the sheet. 
-    """
-
-    # Get xml element tree containing sheet content remove  addresses
-    elem_tree = ET.fromstring(joint_sheet.cells.Content)
-
-    # Get list of addresses for all nonempty cells
-    all_addr = []
-    for addr in [c.attrib['address'] for c in elem_tree.findall('Cell')]: 
-        try:
-            joint_sheet.get(addr)
-            empty = False 
-        except ValueError:
-            empty = True 
-        if not empty:
-            all_addr.append(addr)
-
-    # Get dictionary which maps column letters to list of nonempty cells
-    # in that column. 
-    col_to_addr = collections.OrderedDict()
-    for col in list(string.ascii_uppercase):
-        r = re.compile(fr'^{col}\d*$')
-        match_list = list(filter(r.match, all_addr))
-        if match_list:
-            col_to_addr[col] = match_list
-    return col_to_addr
+    mujoco_file = App.ActiveDocument.Spreadsheet.get('MujocoFile')
+    with open(mujoco_file, 'r') as f:
+        mujoco_data = yaml.safe_load(f)
+    return mujoco_data
 
 
 def fc_print(msg='', end='\n'):
@@ -443,25 +380,17 @@ fc_print()
 msg = 'Running A2PlusAssemblyToMujoco'
 fc_print(msg)
 
+save_info = get_save_info()
+part_info = get_part_info()
+mujoco_info = load_mujoco_yaml_file()
+
+#fc_print(save_info)
+#fc_print(part_info)
+#fc_print(mujoco_info)
+
+# Create mesh files for all parts in the assembly
 if 0:
-    # Get info required for saving files
-    save_info = get_save_info()
-    
-    # Get list of part objects in assembly and extract information
-    part_info = get_part_info()
-    
-    if 0:
-        fc_print(part_info)
-    
-    # Create mesh files for all parts in the assembly
-    if 0:
-        create_mesh_files(part_info, save_info)
-    
-    if 0:
-        create_mujoco_xml_file(part_info, save_info)
+    create_mesh_files(part_info, save_info)
 
-get_joint_info()
-
-
-
+create_mujoco_xml_file(part_info, save_info, mujoco_info)
 

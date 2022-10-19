@@ -43,7 +43,6 @@ OPTION_ATTRIB = {
 
 FLOOR_ATTRIB = { 
         'name'     : 'floor', 
-        'size'     : '0 0 .05',  
         'type'     : 'plane',  
         'material' : 'grid',  
         'condim'   : '3', 
@@ -63,14 +62,13 @@ GRID_MATERIAL_ATTRIB = {
         'name'        : 'grid',  
         'texture'     : 'grid',  
         'texrepeat'   : '10 10',  
-        'texuniform'  : 'true',  
+        'texuniform'  : 'false',  
         'reflectance' : '.2',
         }
 
 LIGHT_ATTRIB = { 
         'name'     : 'spotlight', 
         'mode'     : 'targetbodycom', 
-        'target'   : 'base',  
         'diffuse'  : '0.8 0.8 0.8',  
         'specular' : '0.2 0.2 0.2',  
         }
@@ -84,12 +82,14 @@ def get_part_info():
     part_info = {}
     for part in app_doc.findObjects(Type='Part::FeaturePython'):
         p = part.Placement.Base
-        q = part.Placement.Rotation
+        q = part.Placement.Rotation.Q
+        q = (q[3], q[0], q[1], q[2])
+        fc_print(f'{part.Label} {q}')
         axis = part.Placement.Rotation.Axis
         angle = part.Placement.Rotation.Angle
         _, src_file = os.path.split(part.sourceFile)
         base_name, _ = os.path.splitext(src_file)
-        shape_color = gui_doc.getObject(part.Name).ShapeColor
+        color = invert_color_alpha(gui_doc.getObject(part.Name).ShapeColor)
         part_info[part.Label] = {
                 'pos'        : p, 
                 'quat'       : q, 
@@ -98,7 +98,7 @@ def get_part_info():
                 'src_file'   : src_file,
                 'base_name'  : base_name, 
                 'part_obj'   : part,
-                'color'      : shape_color,
+                'color'      : color,
                 }
     return part_info
 
@@ -225,44 +225,45 @@ def add_bodies(root_elem, part_info, mujoco_info):
     tree.
     """
 
+    root_mujoco_info = mujoco_info['worldbody']['body_tree']
+
     # Add worldbody element
     worldbody_elem = ET.SubElement(root_elem, 'worldbody')
 
-    # Add floor
-    ET.SubElement(worldbody_elem, 'geom', attrib=FLOOR_ATTRIB)
-
-    # Add light
-    # TODO:  use bounding boxes information to extract light positions
+    # Get bounding box information 
     xvals, yvals, zvals = get_xyz_extent(part_info)
     xmin, xmax = xvals
     ymin, ymax = yvals
     zmin, zmax = zvals
+
+    # Add floor
+    floor_dim = 10*max([xmax, ymax, zmax])
+    floor_attrib = dict(FLOOR_ATTRIB)
+    floor_attrib['size'] = f'{floor_dim} {floor_dim} 0.05'
+    ET.SubElement(worldbody_elem, 'geom', attrib=floor_attrib)
+
+    # Add light
     xpos = 0
     ypos = 1.5*ymax
     zpos = 1.5*zmax
     cutoff = 2*max([xmax, ymax, zmax])
     light_attrib = dict(LIGHT_ATTRIB)
-    light_attrib['pos'] = f'{xpos}, {ypos},{zpos}'
+    light_attrib['pos'] = f'{xpos} {ypos} {zpos}'
     light_attrib['cutoff'] = f'{cutoff}' 
-    worldbody_elem = ET.SubElement(worldbody_elem, 'light', attrib=LIGHT_ATTRIB)
+    light_attrib['target'] = root_mujoco_info['label']
+    ET.SubElement(worldbody_elem, 'light', attrib=light_attrib)
 
-    root_mujoco_info = mujoco_info['worldbody']['body_tree']
-
-
-    # Develop - example of extracting placement vector from part
-    # -----------------------------------------------------------
+    # Get placement of root object in worldbody
     root_label = root_mujoco_info['label']
     root_src_file = part_info[root_label]['src_file']
     root_part_file = os.path.join(save_info['active_doc_dir'], root_src_file)
     root_base_name = part_info[root_label]['base_name']
-    root_world_point = root_mujoco_info['joint']['position']
+    try:
+        root_world_point = root_mujoco_info['joint']['position']
+        root_base_vector = get_placement_base_vector(root_part_file, root_world_point)
+    except KeyError:
+        root_base_vector = FreeCAD.Vector(0.0, 0.0, 0.0)
 
-    FreeCAD.openDocument(root_part_file)
-    App.setActiveDocument(root_base_name)
-    doc = App.getDocument(root_base_name)
-    root_point_obj = doc.findObjects(Label=root_world_point)[0]
-    root_point_vector = point_obj.Placement.Base
-    App.closeDocument(root_base_name)
     # -----------------------------------------------------------
 
     label_to_color_name = get_label_to_color_name(part_info)
@@ -277,10 +278,19 @@ def add_bodies(root_elem, part_info, mujoco_info):
         label = body_mujoco_info['label']
         body_part_info = part_info[label]
     
+        # Get position vector and str
+        pos_vector = body_part_info['pos'] - root_base_vector
+        pos_str = vector_to_str(pos_vector)
+
+        # Get orientation
+        quat = body_part_info['quat']
+        quat_str = vector_to_str(quat)
+
         # Create element for current body
         body_attrib = {
                 'name' : label,
-                'pos'  : ' '.join([str(x) for x in body_part_info['pos']]),  
+                'pos'  : pos_str, 
+                'quat' : quat_str, 
                 }
         body_elem = ET.SubElement(parent_elem, 'body', attrib=body_attrib)
     
@@ -290,19 +300,25 @@ def add_bodies(root_elem, part_info, mujoco_info):
                 'type'     : 'mesh', 
                 'mesh'     : body_part_info['base_name'], 
                 'material' : label_to_color_name[label], 
+                'pos'      : pos_str, 
+                'quat' : quat_str, 
                 }
         ET.SubElement(body_elem, 'geom', attrib=geom_attrib)
     
         # Add joint sub-element 
-        if body_mujoco_info['joint']['type'] == 'freejoint':
-            joint_attrib = {'name' : f'{label}_joint'}
-            ET.SubElement(body_elem, 'freejoint', attrib=joint_attrib)
-        else:
-            joint_attrib = {
-                    'name' : f'{label}_joint',
-                    'type' : body_mujoco_info['joint']['type'],
-                    }
-            ET.SubElement(body_elem, 'joint', attrib=joint_attrib)
+        if 'joint' in body_mujoco_info:
+            if body_mujoco_info['joint']['type'] == 'freejoint':
+                joint_attrib = {'name' : f'{label}_joint'}
+                ET.SubElement(body_elem, 'freejoint', attrib=joint_attrib)
+            else:
+                part_file = body_part_info['src_file']
+                point_label = body_mujoco_info['joint']['position']
+                joint_attrib = {
+                        'name' : f'{label}_joint',
+                        'type' : body_mujoco_info['joint']['type'],
+                        'pos'  : pos_str, 
+                        }
+                ET.SubElement(body_elem, 'joint', attrib=joint_attrib)
     
         # If the body has children recurse into them
         if 'children' in body_mujoco_info:
@@ -315,6 +331,19 @@ def add_bodies(root_elem, part_info, mujoco_info):
     add_body_to_tree(worldbody_elem, root_mujoco_info)
     
 
+def get_placement_base_vector(part_file, obj_label):
+    """
+    Get the vector specifying the placement base of an object in a a part file.
+    """
+    _, file_name = os.path.split(part_file)
+    base_name, _ = os.path.splitext(file_name)
+    FreeCAD.openDocument(part_file)
+    App.setActiveDocument(base_name)
+    doc = App.getDocument(base_name)
+    obj = doc.findObjects(Label=obj_label)[0]
+    base_vector = obj.Placement.Base
+    App.closeDocument(base_name)
+    return base_vector
 
 def add_equalities(root_elem, part_info, mujoco_info):
     pass
@@ -354,6 +383,16 @@ def get_label_to_color_name(part_info):
         label_to_color_name[item] = color_name
     return label_to_color_name
 
+def invert_color_alpha(color):
+    color_list = list(color)
+    color_list[-1] = 1.0 - color_list[-1]
+    return tuple(color_list)
+
+def vector_to_str(vector):
+    return ' '.join([str(x) for x in vector])
+
+def vector_to_str(vector):
+    return ' '.join([str(x) for x in vector])
 
 def load_mujoco_yaml_file():
     """
@@ -364,7 +403,6 @@ def load_mujoco_yaml_file():
     with open(mujoco_file, 'r') as f:
         mujoco_data = yaml.safe_load(f)
     return mujoco_data
-
 
 def fc_print(msg='', end='\n'):
     """

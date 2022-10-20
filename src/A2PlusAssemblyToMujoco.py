@@ -78,28 +78,10 @@ def get_part_info():
     Extracts part information, e.g., postion, rotation, source file.
     """
     app_doc = App.ActiveDocument
-    gui_doc = FreeCADGui.getDocument(App.ActiveDocument.Name)
     part_info = {}
     for part in app_doc.findObjects(Type='Part::FeaturePython'):
-        p = part.Placement.Base
-        q = part.Placement.Rotation.Q
-        q = (q[3], q[0], q[1], q[2])
-        fc_print(f'{part.Label} {q}')
-        axis = part.Placement.Rotation.Axis
-        angle = part.Placement.Rotation.Angle
         _, src_file = os.path.split(part.sourceFile)
-        base_name, _ = os.path.splitext(src_file)
-        color = invert_color_alpha(gui_doc.getObject(part.Name).ShapeColor)
-        part_info[part.Label] = {
-                'pos'        : p, 
-                'quat'       : q, 
-                'axis'       : axis,
-                'angle'      : angle,
-                'src_file'   : src_file,
-                'base_name'  : base_name, 
-                'part_obj'   : part,
-                'color'      : color,
-                }
+        part_info[part.Label] = {'part_obj': part, 'src_file': src_file}
     return part_info
 
 
@@ -142,18 +124,20 @@ def create_mesh_files(part_info, save_info):
     """
     mesh_dir = save_info['mesh_dir']
     os.makedirs(mesh_dir, exist_ok=True)
+
     msg = f'saving mesh files to: {mesh_dir}'
     fc_print(msg)
 
     for item, data in part_info.items():
-        part_file = os.path.join(save_info['active_doc_dir'], data['src_file'])
-        base_name = data['base_name']
         part_obj = data['part_obj']
+        src_file = data['src_file']
+        src_file_fullpath = get_src_fullpath(src_file, save_info)
+        base_name = get_base_name(src_file)
         mesh_file = os.path.join(mesh_dir, get_mesh_file(base_name))
         fc_print(f'saving:  {mesh_file}')
 
         # Open document and save .stl file
-        FreeCAD.openDocument(part_file)
+        FreeCAD.openDocument(src_file_fullpath)
         App.setActiveDocument(base_name)
         doc = App.getDocument(base_name)
         last_feature_obj = doc.findObjects(Type="PartDesign::Feature")[-1]
@@ -200,13 +184,13 @@ def add_assets(root_elem, part_info, mujoco_info):
     """
     asset_elem = ET.SubElement(root_elem, 'asset') 
     for item, data in part_info.items():
-        base_name = data['base_name']
+        base_name = get_base_name(data['src_file'])
         mesh_file = os.path.join('.', MESH_FILE_DIR, get_mesh_file(base_name))
         mesh_attrib = {'file' : mesh_file}
         ET.SubElement(asset_elem, 'mesh', attrib=mesh_attrib)
 
     # Add material elements for colors 
-    color_list = list({data['color'] for item, data in part_info.items()})
+    color_list = get_color_list(part_info)
     for index, color in enumerate(color_list):
         color_name = f'color_{index}'
         color_vals = ' '.join([f'{val:1.2f}' for val in color])
@@ -243,7 +227,7 @@ def add_bodies(root_elem, part_info, mujoco_info):
     ET.SubElement(worldbody_elem, 'geom', attrib=floor_attrib)
 
     # Add light
-    xpos = 0
+    xpos = 1.5*xmax
     ypos = 1.5*ymax
     zpos = 1.5*zmax
     cutoff = 2*max([xmax, ymax, zmax])
@@ -256,80 +240,103 @@ def add_bodies(root_elem, part_info, mujoco_info):
     # Get placement of root object in worldbody
     root_label = root_mujoco_info['label']
     root_src_file = part_info[root_label]['src_file']
-    root_part_file = os.path.join(save_info['active_doc_dir'], root_src_file)
-    root_base_name = part_info[root_label]['base_name']
+    root_base_name = get_base_name(root_src_file)
+    root_src_file = get_src_fullpath(root_src_file, save_info)
     try:
-        root_world_point = root_mujoco_info['joint']['position']
-        root_base_vector = get_placement_base_vector(root_part_file, root_world_point)
+        root_point = root_mujoco_info['joint']['position']
     except KeyError:
         root_base_vector = FreeCAD.Vector(0.0, 0.0, 0.0)
-
-    # -----------------------------------------------------------
+    else:
+        root_base_vector = get_placement_base_vector(root_src_file, root_point)
 
     label_to_color_name = get_label_to_color_name(part_info)
 
     # Begin inner function -----------------------------------------------------
-
-    def add_body_to_tree(parent_elem, body_mujoco_info):
+    def add_body_to_tree(parent_elem, parent_mujoco_info, body_mujoco_info):
         """
         Adds the current, specified by body_mujoco_info, to the the parent 
         element. 
         """
-        label = body_mujoco_info['label']
-        body_part_info = part_info[label]
+        body_label = body_mujoco_info['label']
+        body_part_info = part_info[body_label]
+        body_placement = body_part_info['part_obj'].Placement
+
+        src_file = body_part_info['src_file']
+        base_name = get_base_name(src_file)
+        color_name = label_to_color_name[body_label]
     
         # Get position vector and str
-        pos_vector = body_part_info['pos'] - root_base_vector
+        pos_vector = body_placement.Base - root_base_vector
         pos_str = vector_to_str(pos_vector)
 
         # Get orientation
-        quat = body_part_info['quat']
+        quat = convert_quat_to_mujoco(body_placement.Rotation.Q) 
         quat_str = vector_to_str(quat)
 
         # Create element for current body
         body_attrib = {
-                'name' : label,
+                'name' : body_label,
                 'pos'  : pos_str, 
                 'quat' : quat_str, 
                 }
         body_elem = ET.SubElement(parent_elem, 'body', attrib=body_attrib)
     
         # Add geom sub-element
+        mesh_name = f'{body_label}_mesh' 
         geom_attrib = {
-                'name'     : f'{label}_mesh', 
+                'name'     : mesh_name,
                 'type'     : 'mesh', 
-                'mesh'     : body_part_info['base_name'], 
-                'material' : label_to_color_name[label], 
+                'mesh'     : base_name, 
+                'material' : color_name, 
                 'pos'      : pos_str, 
-                'quat' : quat_str, 
+                'quat'     : quat_str, 
                 }
         ET.SubElement(body_elem, 'geom', attrib=geom_attrib)
     
         # Add joint sub-element 
         if 'joint' in body_mujoco_info:
-            if body_mujoco_info['joint']['type'] == 'freejoint':
-                joint_attrib = {'name' : f'{label}_joint'}
+            joint_name = f'{body_label}_joint'
+            joint_type = body_mujoco_info['joint']['type']
+            joint_attrib = {'name' : joint_name}
+            if joint_type == 'freejoint':
                 ET.SubElement(body_elem, 'freejoint', attrib=joint_attrib)
             else:
-                part_file = body_part_info['src_file']
-                point_label = body_mujoco_info['joint']['position']
-                joint_attrib = {
-                        'name' : f'{label}_joint',
-                        'type' : body_mujoco_info['joint']['type'],
+                joint_attrib.update({
+                        'name' : joint_name, 
+                        'type' : joint_type, 
                         'pos'  : pos_str, 
-                        }
+                    })
+                if joint_type in ('hinge', 'slide'):
+                    joint_axis_label = body_mujoco_info['joint']['axis']
+                    parent_label = parent_mujoco_info['label']
+                    parent_src_file = part_info[parent_label]['src_file']
+                    parent_src_file = get_src_fullpath(parent_src_file, save_info)
+                    joint_axis_vector = get_datum_line_vector(
+                            parent_src_file, 
+                            joint_axis_label
+                            )
+                    parent_obj = part_info[parent_label]['part_obj']
+                    parent_rot = parent_obj.Placement.Rotation
+                    joint_axis_vector = parent_rot.multVec(joint_axis_vector)
+                    joint_attrib['axis'] = vector_to_str(joint_axis_vector)
                 ET.SubElement(body_elem, 'joint', attrib=joint_attrib)
     
         # If the body has children recurse into them
         if 'children' in body_mujoco_info:
             for child_mujoco_info in body_mujoco_info['children']:
-                add_body_to_tree(body_elem, child_mujoco_info)
-
+                add_body_to_tree(body_elem, body_mujoco_info, child_mujoco_info)
     # End inner function -------------------------------------------------------
 
-
-    add_body_to_tree(worldbody_elem, root_mujoco_info)
+    add_body_to_tree(worldbody_elem, {}, root_mujoco_info)
     
+
+def add_equalities(root_elem, part_info, mujoco_info):
+    pass
+
+
+def add_actuators(root_elem, part_info, mujoco_info):
+    pass
+
 
 def get_placement_base_vector(part_file, obj_label):
     """
@@ -345,12 +352,31 @@ def get_placement_base_vector(part_file, obj_label):
     App.closeDocument(base_name)
     return base_vector
 
-def add_equalities(root_elem, part_info, mujoco_info):
-    pass
+
+def get_placement_rotation(part_file, obj_label):
+    """
+    Get the rotataion specifying the object orientation of an object given a 
+    part file and an object label. 
+    """
+    _, file_name = os.path.split(part_file)
+    base_name, _ = os.path.splitext(file_name)
+    FreeCAD.openDocument(part_file)
+    App.setActiveDocument(base_name)
+    doc = App.getDocument(base_name)
+    obj = doc.findObjects(Label=obj_label)[0]
+    rotation = obj.Placement.Rotation
+    App.closeDocument(base_name)
+    return rotation
 
 
-def add_actuators(root_elem, part_info, mujoco_info):
-    pass
+def get_datum_line_vector(part_file, axis_label):
+    """
+    Get the vector of a datum linegiven the part file and the label of the axis
+    object.
+    """
+    rotation = get_placement_rotation(part_file, axis_label)
+    axis_vector = rotation.multVec(FreeCAD.Vector(0.0, 0.0, 1.0))
+    return axis_vector
 
 
 def get_xyz_extent(part_info):
@@ -375,24 +401,55 @@ def get_label_to_color_name(part_info):
     """ 
     Creates mapping from part label to color names
     """
-    color_list = list({data['color'] for item, data in part_info.items()})
+    color_list = get_color_list(part_info)
     label_to_color_name = {}
-    for item, data in part_info.items():
-        index = color_list.index(data['color'])
-        color_name = f'color_{index}'
-        label_to_color_name[item] = color_name
+    for k, v in part_info.items():
+        color = get_part_color(v['part_obj'])
+        color_index = color_list.index(color)
+        color_name = f'color_{color_index}'
+        label_to_color_name[k] = color_name
     return label_to_color_name
 
+
+def get_color_list(part_info):
+    """
+    Get list of unique colors used in part assembly
+    """
+    color_set = {get_part_color(v['part_obj']) for k, v in part_info.items()}
+    return list(color_set)
+
+
+def get_part_color(part_obj):
+    """
+    Get color of part in assembly
+    """
+    gui_doc = FreeCADGui.getDocument(App.ActiveDocument.Name)
+    part_color = invert_color_alpha(gui_doc.getObject(part_obj.Name).ShapeColor)
+    return part_color
+
+
 def invert_color_alpha(color):
+    """
+    Invert alpha range in 4-tuple color 0 -> 1 and 1 -> 0. 
+    """
     color_list = list(color)
     color_list[-1] = 1.0 - color_list[-1]
     return tuple(color_list)
 
-def vector_to_str(vector):
-    return ' '.join([str(x) for x in vector])
 
 def vector_to_str(vector):
+    """
+    Converts a vector to a string representation of the vector
+    """
     return ' '.join([str(x) for x in vector])
+
+
+def convert_quat_to_mujoco(q):
+    """
+    Convert FreeCAD quaternion to mujoco's convention.
+    """
+    return (q[3], q[0], q[1], q[2])
+
 
 def load_mujoco_yaml_file():
     """
@@ -403,6 +460,22 @@ def load_mujoco_yaml_file():
     with open(mujoco_file, 'r') as f:
         mujoco_data = yaml.safe_load(f)
     return mujoco_data
+
+
+def get_base_name(src_file):
+    """
+    Get base name of file - filename without the file extension.
+    """
+    base_name, _ = os.path.splitext(src_file)
+    return base_name
+
+
+def get_src_fullpath(src_file, save_info):
+    """
+    Get fullpath of source file.
+    """
+    return os.path.join(save_info['active_doc_dir'], src_file)
+
 
 def fc_print(msg='', end='\n'):
     """
@@ -427,7 +500,7 @@ mujoco_info = load_mujoco_yaml_file()
 #fc_print(mujoco_info)
 
 # Create mesh files for all parts in the assembly
-if 0:
+if 1:
     create_mesh_files(part_info, save_info)
 
 create_mujoco_xml_file(part_info, save_info, mujoco_info)

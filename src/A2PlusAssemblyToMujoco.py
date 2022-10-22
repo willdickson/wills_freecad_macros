@@ -32,7 +32,7 @@ __Requires__ = 'FreeCAD 0.19'
 MESH_FILE_DIR = 'mesh_files'
 MUJOCO_MODEL_FILE = 'model.xml'
 
-COMPILER_ATTRIB = {
+DEFAULT_COMPILER_ATTRIB = {
         'coordinate' : 'global'
         }
 
@@ -85,17 +85,17 @@ def get_part_info():
     return part_info
 
 
-def get_save_info():
+def get_file_info():
     active_doc_dir, active_doc_file = os.path.split(App.ActiveDocument.FileName)
     save_dir = select_save_dir_dialog()
     mesh_dir = os.path.join(save_dir, MESH_FILE_DIR)
-    save_info = {
+    file_info = {
             'active_doc_dir'  : active_doc_dir, 
             'active_doc_file' : active_doc_file, 
             'save_dir'        : save_dir,
             'mesh_dir'        : mesh_dir,
             }
-    return save_info
+    return file_info
 
 
 def select_save_dir_dialog():
@@ -117,12 +117,12 @@ def get_mesh_file(base_name):
     return mesh_file
 
 
-def create_mesh_files(part_info, save_info):
+def create_mesh_files(part_info, file_info):
     """
     Creates an stl file for each part in the part_info and saves it to the
-    sub-directory MESH_FILE_DIR of the saveto_dir in the save_info. 
+    sub-directory MESH_FILE_DIR of the saveto_dir in the file_info. 
     """
-    mesh_dir = save_info['mesh_dir']
+    mesh_dir = file_info['mesh_dir']
     os.makedirs(mesh_dir, exist_ok=True)
 
     msg = f'saving mesh files to: {mesh_dir}'
@@ -131,7 +131,7 @@ def create_mesh_files(part_info, save_info):
     for item, data in part_info.items():
         part_obj = data['part_obj']
         src_file = data['src_file']
-        src_file_fullpath = get_src_fullpath(src_file, save_info)
+        src_file_fullpath = get_src_fullpath(src_file, file_info)
         base_name = get_base_name(src_file)
         mesh_file = os.path.join(mesh_dir, get_mesh_file(base_name))
         fc_print(f'saving:  {mesh_file}')
@@ -145,14 +145,22 @@ def create_mesh_files(part_info, save_info):
         App.closeDocument(base_name)
 
 
-def create_mujoco_xml_file(part_info, save_info, mujoco_info):
+def create_mujoco_xml_file(part_info, file_info, mujoco_info):
     """
     Creates the mujoco xml file.
     """
 
     # Create element tree  
     root_elem = ET.Element('mujoco')
-    ET.SubElement(root_elem, 'compiler', attrib=COMPILER_ATTRIB)
+    compiler_attrib = dict(DEFAULT_COMPILER_ATTRIB)
+    try:
+        user_compiler_attrib = mujoco_info['compiler']
+    except KeyError:
+        pass
+    else:
+        for k,v in user_compiler_attrib.items():
+            compiler_attrib[k] = convert_value_to_mujoco_xml(v)
+    ET.SubElement(root_elem, 'compiler', attrib=compiler_attrib)
 
     add_option(root_elem, part_info, mujoco_info)
     add_assets(root_elem, part_info, mujoco_info)
@@ -163,7 +171,7 @@ def create_mujoco_xml_file(part_info, save_info, mujoco_info):
     # Save mujoco model to pretty printed xml file
     xml_str = ET.tostring(root_elem)
     xml_str = xml.dom.minidom.parseString(xml_str).toprettyxml(indent='  ')
-    save_dir = save_info['save_dir']
+    save_dir = file_info['save_dir']
     mujoco_xml_file = os.path.join(save_dir, MUJOCO_MODEL_FILE)
     with open(mujoco_xml_file, 'w') as f:
         f.write(xml_str)
@@ -241,7 +249,7 @@ def add_bodies(root_elem, part_info, mujoco_info):
     root_label = root_mujoco_info['label']
     root_src_file = part_info[root_label]['src_file']
     root_base_name = get_base_name(root_src_file)
-    root_src_file = get_src_fullpath(root_src_file, save_info)
+    root_src_file = get_src_fullpath(root_src_file, file_info)
     try:
         root_point = root_mujoco_info['joint']['position']
     except KeyError:
@@ -310,7 +318,7 @@ def add_bodies(root_elem, part_info, mujoco_info):
                     joint_axis_label = body_mujoco_info['joint']['axis']
                     parent_label = parent_mujoco_info['label']
                     parent_src_file = part_info[parent_label]['src_file']
-                    parent_src_file = get_src_fullpath(parent_src_file, save_info)
+                    parent_src_file = get_src_fullpath(parent_src_file, file_info)
                     joint_axis_vector = get_datum_line_vector(
                             parent_src_file, 
                             joint_axis_label
@@ -319,6 +327,14 @@ def add_bodies(root_elem, part_info, mujoco_info):
                     parent_rot = parent_obj.Placement.Rotation
                     joint_axis_vector = parent_rot.multVec(joint_axis_vector)
                     joint_attrib['axis'] = vector_to_str(joint_axis_vector)
+                try:
+                    joint_parameters = body_mujoco_info['joint']['parameters']
+                except KeyError:
+                    pass
+                else:
+                    for k,v in joint_parameters.items(): 
+                        joint_attrib[k] = convert_value_to_mujoco_xml(v)
+
                 ET.SubElement(body_elem, 'joint', attrib=joint_attrib)
     
         # If the body has children recurse into them
@@ -335,7 +351,31 @@ def add_equalities(root_elem, part_info, mujoco_info):
 
 
 def add_actuators(root_elem, part_info, mujoco_info):
-    pass
+    if not 'actuator' in mujoco_info:
+        return
+    actuator_elem = ET.SubElement(root_elem, 'actuator')
+    for actuator_info in mujoco_info['actuator']:
+        actuator_tag = actuator_info['type']
+        actuator_attrib = {}
+        try:
+            param_info = actuator_info['parameters']
+        except KeyError:
+            pass
+        else:
+            for name,value in param_info.items():
+                actuator_attrib[name] = convert_value_to_mujoco_xml(value)
+        ET.SubElement(actuator_elem, actuator_tag, attrib=actuator_attrib )
+
+
+def convert_value_to_mujoco_xml(value):
+    converted_value = value
+    if value in (True, False):
+        converted_value = str(value).lower()
+    elif type(value) in (list, tuple):
+        converted_value = ' '.join([str(x) for x in value])
+    else:
+        converted_value = str(value)
+    return converted_value
 
 
 def get_placement_base_vector(part_file, obj_label):
@@ -470,11 +510,11 @@ def get_base_name(src_file):
     return base_name
 
 
-def get_src_fullpath(src_file, save_info):
+def get_src_fullpath(src_file, file_info):
     """
     Get fullpath of source file.
     """
-    return os.path.join(save_info['active_doc_dir'], src_file)
+    return os.path.join(file_info['active_doc_dir'], src_file)
 
 
 def fc_print(msg='', end='\n'):
@@ -491,17 +531,17 @@ fc_print()
 msg = 'Running A2PlusAssemblyToMujoco'
 fc_print(msg)
 
-save_info = get_save_info()
+file_info = get_file_info()
 part_info = get_part_info()
 mujoco_info = load_mujoco_yaml_file()
 
-#fc_print(save_info)
+#fc_print(file_info)
 #fc_print(part_info)
 #fc_print(mujoco_info)
 
 # Create mesh files for all parts in the assembly
-if 1:
-    create_mesh_files(part_info, save_info)
+if 0:
+    create_mesh_files(part_info, file_info)
 
-create_mujoco_xml_file(part_info, save_info, mujoco_info)
+create_mujoco_xml_file(part_info, file_info, mujoco_info)
 

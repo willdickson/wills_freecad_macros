@@ -164,8 +164,8 @@ def create_mujoco_xml_file(part_info, file_info, mujoco_info):
 
     add_option(root_elem, part_info, mujoco_info)
     add_assets(root_elem, part_info, mujoco_info)
-    add_bodies(root_elem, part_info, mujoco_info)
-    add_equalities(root_elem, part_info, mujoco_info)
+    add_bodies(root_elem, part_info, file_info, mujoco_info)
+    add_equalities(root_elem, part_info, file_info, mujoco_info)
     add_actuators(root_elem, part_info, mujoco_info)
 
     # Save mujoco model to pretty printed xml file
@@ -211,7 +211,7 @@ def add_assets(root_elem, part_info, mujoco_info):
     ET.SubElement(asset_elem, 'material', attrib=GRID_MATERIAL_ATTRIB)
 
 
-def add_bodies(root_elem, part_info, mujoco_info):
+def add_bodies(root_elem, part_info, file_info, mujoco_info):
     """
     Adds the top level worldbody element and all subelements to the element
     tree.
@@ -265,78 +265,86 @@ def add_bodies(root_elem, part_info, mujoco_info):
         Adds the current, specified by body_mujoco_info, to the the parent 
         element. 
         """
+
+        # Get parent information
+        if parent_mujoco_info:
+            parent_label = parent_mujoco_info['label']
+            parent_src_file = part_info[parent_label]['src_file']
+            parent_src_file = get_src_fullpath(parent_src_file, file_info)
+            parent_obj = part_info[parent_label]['part_obj']
+            parent_rot = parent_obj.Placement.Rotation
+        else:
+            parent_label = None
+            parent_src_file = None
+            parent_scr_file = None
+            parent_obj = None
+            parent_rot = None
+
+        # Extract body information
         body_label = body_mujoco_info['label']
         body_part_info = part_info[body_label]
+        body_src_file = body_part_info['src_file']
         body_placement = body_part_info['part_obj'].Placement
-
-        src_file = body_part_info['src_file']
-        base_name = get_base_name(src_file)
-        color_name = label_to_color_name[body_label]
+        body_pos_vector = body_placement.Base
+        body_base_name = get_base_name(body_src_file)
+        body_color_name = label_to_color_name[body_label]
     
         # Get position vector and str
-        pos_vector = body_placement.Base - root_base_vector
-        pos_str = vector_to_str(pos_vector)
+        pos_vector = body_pos_vector - root_base_vector
+        body_pos_str = vector_to_str(pos_vector)
 
         # Get orientation
-        quat = convert_quat_to_mujoco(body_placement.Rotation.Q) 
-        quat_str = vector_to_str(quat)
+        body_quat = convert_quat_to_mujoco(body_placement.Rotation.Q) 
+        body_quat_str = vector_to_str(body_quat)
 
         # Create element for current body
         body_attrib = {
                 'name' : body_label,
-                'pos'  : pos_str, 
-                'quat' : quat_str, 
+                'pos'  : body_pos_str, 
+                'quat' : body_quat_str, 
                 }
         body_elem = ET.SubElement(parent_elem, 'body', attrib=body_attrib)
     
         # Add geom sub-element
-        mesh_name = f'{body_label}_mesh' 
+        body_mesh_name = f'{body_label}_mesh' 
         geom_attrib = {
-                'name'     : mesh_name,
+                'name'     : body_mesh_name,
                 'type'     : 'mesh', 
-                'mesh'     : base_name, 
-                'material' : color_name, 
-                'pos'      : pos_str, 
-                'quat'     : quat_str, 
+                'mesh'     : body_base_name, 
+                'material' : body_color_name, 
+                'pos'      : body_pos_str, 
+                'quat'     : body_quat_str, 
                 }
         ET.SubElement(body_elem, 'geom', attrib=geom_attrib)
     
         # Add joint sub-element 
         if 'joint' in body_mujoco_info:
-            joint_name = f'{body_label}_joint'
-            joint_type = body_mujoco_info['joint']['type']
-            joint_attrib = {'name' : joint_name}
-            if joint_type == 'freejoint':
-                ET.SubElement(body_elem, 'freejoint', attrib=joint_attrib)
+            body_joint_name = f'{body_label}_joint'
+            body_joint_type = body_mujoco_info['joint']['type']
+            body_joint_attrib = {'name' : body_joint_name} 
+            if body_joint_type == 'freejoint':
+                ET.SubElement(body_elem, 'freejoint', attrib=body_joint_attrib)
             else:
-                joint_attrib.update({
-                        'name' : joint_name, 
-                        'type' : joint_type, 
-                        'pos'  : pos_str, 
+                body_joint_attrib.update({
+                        'name' : body_joint_name, 
+                        'type' : body_joint_type, 
+                        'pos'  : body_pos_str,
                     })
-                if joint_type in ('hinge', 'slide'):
-                    joint_axis_label = body_mujoco_info['joint']['axis']
-                    parent_label = parent_mujoco_info['label']
-                    parent_src_file = part_info[parent_label]['src_file']
-                    parent_src_file = get_src_fullpath(parent_src_file, file_info)
-                    joint_axis_vector = get_datum_line_vector(
-                            parent_src_file, 
-                            joint_axis_label
-                            )
-                    parent_obj = part_info[parent_label]['part_obj']
-                    parent_rot = parent_obj.Placement.Rotation
-                    joint_axis_vector = parent_rot.multVec(joint_axis_vector)
-                    joint_attrib['axis'] = vector_to_str(joint_axis_vector)
                 try:
-                    joint_parameters = body_mujoco_info['joint']['parameters']
+                    body_joint_parameters = body_mujoco_info['joint']['parameters']
                 except KeyError:
                     pass
                 else:
-                    for k,v in joint_parameters.items(): 
-                        joint_attrib[k] = convert_value_to_mujoco_xml(v)
+                    for k,v in body_joint_parameters.items(): 
+                        body_joint_attrib[k] = convert_value_to_mujoco_xml(v)
+                        if k == 'axis':
+                            axis_vector = get_datum_line_vector(parent_src_file, v)
+                            axis_vector = parent_rot.multVec(axis_vector)
+                            body_joint_attrib['axis'] = vector_to_str(axis_vector)
+                        else:
+                            body_joint_attrib[k] = convert_value_to_mujoco_xml(v)
+                ET.SubElement(body_elem, 'joint', attrib=body_joint_attrib)
 
-                ET.SubElement(body_elem, 'joint', attrib=joint_attrib)
-    
         # If the body has children recurse into them
         if 'children' in body_mujoco_info:
             for child_mujoco_info in body_mujoco_info['children']:
@@ -346,8 +354,33 @@ def add_bodies(root_elem, part_info, mujoco_info):
     add_body_to_tree(worldbody_elem, {}, root_mujoco_info)
     
 
-def add_equalities(root_elem, part_info, mujoco_info):
-    pass
+def add_equalities(root_elem, part_info, file_info, mujoco_info):
+    if not 'equality' in mujoco_info:
+        return
+    equality_elem = ET.SubElement(root_elem, 'equality')
+    for equality_info in mujoco_info['equality']:
+        equality_tag = equality_info['type']
+        equality_attrib = {}
+        try:
+            param_info = equality_info['parameters']
+        except KeyError:
+            pass
+        else:
+            for k, v in param_info.items():
+                if k == 'anchor':
+                    body2_label = param_info['body2']
+                    body2_part_obj = part_info[body2_label]['part_obj']
+                    body2_src_file = part_info[body2_label]['src_file']
+                    body2_src_file = get_src_fullpath(body2_src_file, file_info)
+                    anchor_vector = get_placement_base_vector(body2_src_file, v)
+                    body2_vector = body2_part_obj.Placement.Base
+                    body2_rotation = body2_part_obj.Placement.Rotation
+                    anchor_vector = body2_rotation.multVec(anchor_vector)
+                    anchor_vector = anchor_vector + body2_vector
+                    equality_attrib[k] = vector_to_str(anchor_vector)
+                else:
+                    equality_attrib[k] = convert_value_to_mujoco_xml(v)
+        ET.SubElement(equality_elem, equality_tag, attrib=equality_attrib )
 
 
 def add_actuators(root_elem, part_info, mujoco_info):
@@ -362,8 +395,8 @@ def add_actuators(root_elem, part_info, mujoco_info):
         except KeyError:
             pass
         else:
-            for name,value in param_info.items():
-                actuator_attrib[name] = convert_value_to_mujoco_xml(value)
+            for k, v in param_info.items():
+                actuator_attrib[k] = convert_value_to_mujoco_xml(v)
         ET.SubElement(actuator_elem, actuator_tag, attrib=actuator_attrib )
 
 
@@ -491,12 +524,13 @@ def convert_quat_to_mujoco(q):
     return (q[3], q[0], q[1], q[2])
 
 
-def load_mujoco_yaml_file():
+def load_mujoco_yaml_file(file_info):
     """
     Loads extra data required for creating mujoco xml from the mujoco yaml
     file. 
     """
     mujoco_file = App.ActiveDocument.Spreadsheet.get('MujocoFile')
+    mujoco_file = os.path.join(file_info['active_doc_dir'], mujoco_file)
     with open(mujoco_file, 'r') as f:
         mujoco_data = yaml.safe_load(f)
     return mujoco_data
@@ -531,17 +565,17 @@ fc_print()
 msg = 'Running A2PlusAssemblyToMujoco'
 fc_print(msg)
 
-file_info = get_file_info()
+file_info_tmp = get_file_info()
 part_info = get_part_info()
-mujoco_info = load_mujoco_yaml_file()
+mujoco_info = load_mujoco_yaml_file(file_info_tmp)
 
 #fc_print(file_info)
 #fc_print(part_info)
 #fc_print(mujoco_info)
 
 # Create mesh files for all parts in the assembly
-if 0:
-    create_mesh_files(part_info, file_info)
+if 1:
+    create_mesh_files(part_info, file_info_tmp)
 
-create_mujoco_xml_file(part_info, file_info, mujoco_info)
+create_mujoco_xml_file(part_info, file_info_tmp, mujoco_info)
 

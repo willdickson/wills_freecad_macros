@@ -288,6 +288,10 @@ def add_bodies(root_elem, part_info, file_info, mujoco_info):
         body_pos_vector = body_placement.Base
         body_base_name = get_base_name(body_src_file)
         body_color_name = label_to_color_name[body_label]
+        try:
+            body_density = convert_value_to_mujoco_xml(body_mujoco_info['density'])
+        except KeyError:
+            body_density = None
     
         # Get position vector and str
         pos_vector = body_pos_vector - root_base_vector
@@ -315,6 +319,8 @@ def add_bodies(root_elem, part_info, file_info, mujoco_info):
                 'pos'      : body_pos_str, 
                 'quat'     : body_quat_str, 
                 }
+        if body_density is not None:
+            geom_attrib['density'] = body_density
         ET.SubElement(body_elem, 'geom', attrib=geom_attrib)
     
         # Add joint sub-element 
@@ -367,7 +373,7 @@ def add_equalities(root_elem, part_info, file_info, mujoco_info):
             pass
         else:
             for k, v in param_info.items():
-                if k == 'anchor':
+                if k in ('anchor', 'weld'):
                     body2_label = param_info['body2']
                     body2_part_obj = part_info[body2_label]['part_obj']
                     body2_src_file = part_info[body2_label]['src_file']
@@ -497,16 +503,18 @@ def get_part_color(part_obj):
     Get color of part in assembly
     """
     gui_doc = FreeCADGui.getDocument(App.ActiveDocument.Name)
-    part_color = invert_color_alpha(gui_doc.getObject(part_obj.Name).ShapeColor)
+    color = gui_doc.getObject(part_obj.Name).ShapeColor
+    transparency = gui_doc.getObject(part_obj.Name).Transparency
+    part_color = color_to_mujoco(color, transparency)
     return part_color
 
 
-def invert_color_alpha(color):
+def color_to_mujoco(color, trans):
     """
-    Invert alpha range in 4-tuple color 0 -> 1 and 1 -> 0. 
+    Convers FreeCAD color and transparency to mujoco color w/ alpha channel. 
     """
     color_list = list(color)
-    color_list[-1] = 1.0 - color_list[-1]
+    color_list[-1] = 1.0 - 0.01*trans
     return tuple(color_list)
 
 

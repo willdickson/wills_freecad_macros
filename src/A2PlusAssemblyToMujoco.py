@@ -325,31 +325,51 @@ def add_bodies(root_elem, part_info, file_info, mujoco_info):
     
         # Add joint sub-element 
         if 'joint' in body_mujoco_info:
-            body_joint_name = f'{body_label}_joint'
-            body_joint_type = body_mujoco_info['joint']['type']
-            body_joint_attrib = {'name' : body_joint_name} 
-            if body_joint_type == 'freejoint':
-                ET.SubElement(body_elem, 'freejoint', attrib=body_joint_attrib)
+
+            if type(body_mujoco_info['joint']) == list:
+                joint_info_list = body_mujoco_info['joint']
             else:
-                body_joint_attrib.update({
-                        'name' : body_joint_name, 
-                        'type' : body_joint_type, 
-                        'pos'  : body_pos_str,
-                    })
-                try:
-                    body_joint_parameters = body_mujoco_info['joint']['parameters']
-                except KeyError:
-                    pass
+                joint_info_list = [body_mujoco_info['joint']]
+
+            for joint_num, joint_info in enumerate(joint_info_list):
+                if len(joint_info_list) == 1:
+                    body_joint_name = f'{body_label}_joint'
                 else:
-                    for k,v in body_joint_parameters.items(): 
-                        body_joint_attrib[k] = convert_value_to_mujoco_xml(v)
-                        if k == 'axis':
-                            axis_vector = get_datum_line_vector(parent_src_file, v)
-                            axis_vector = parent_rot.multVec(axis_vector)
-                            body_joint_attrib['axis'] = vector_to_str(axis_vector)
-                        else:
+                    try:
+                        joint_label = joint_info['label']
+                    except KeyError:
+                        joint_label = f'{joint_num}' 
+                    finally:
+                        body_joint_name = f'{body_label}_joint_{joint_label}'
+
+                body_joint_type = joint_info['type']
+                body_joint_attrib = {'name' : body_joint_name} 
+
+                if body_joint_type == 'freejoint':
+                    ET.SubElement(body_elem, 'freejoint', attrib=body_joint_attrib)
+                else:
+                    body_joint_attrib.update({
+                            'name' : body_joint_name, 
+                            'type' : body_joint_type, 
+                            'pos'  : body_pos_str,
+                        })
+                    try:
+                        body_joint_parameters = joint_info['parameters']
+                    except KeyError:
+                        pass
+                    else:
+                        for k,v in body_joint_parameters.items(): 
                             body_joint_attrib[k] = convert_value_to_mujoco_xml(v)
-                ET.SubElement(body_elem, 'joint', attrib=body_joint_attrib)
+                            if k == 'axis':
+                                if type(v) == str:
+                                    axis_vector = get_datum_line_vector(parent_src_file, v)
+                                else:
+                                    axis_vector = FreeCAD.Vector(v)
+                                axis_vector = parent_rot.multVec(axis_vector)
+                                body_joint_attrib['axis'] = vector_to_str(axis_vector)
+                            else:
+                                body_joint_attrib[k] = convert_value_to_mujoco_xml(v)
+                    ET.SubElement(body_elem, 'joint', attrib=body_joint_attrib)
 
         # If the body has children recurse into them
         if 'children' in body_mujoco_info:

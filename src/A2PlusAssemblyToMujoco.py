@@ -593,9 +593,9 @@ fc_print()
 msg = 'Running A2PlusAssemblyToMujoco'
 fc_print(msg)
 
-file_info_tmp = get_file_info()
+file_info = get_file_info()
 part_info = get_part_info()
-mujoco_info = load_mujoco_yaml_file(file_info_tmp)
+mujoco_info = load_mujoco_yaml_file(file_info)
 
 #fc_print(file_info)
 #fc_print(part_info)
@@ -603,7 +603,7 @@ mujoco_info = load_mujoco_yaml_file(file_info_tmp)
 
 # Create mesh files for all parts in the assembly
 if 1:
-    create_mesh_files(part_info, file_info_tmp)
+    create_mesh_files(part_info, file_info)
 
-create_mujoco_xml_file(part_info, file_info_tmp, mujoco_info)
+create_mujoco_xml_file(part_info, file_info, mujoco_info)
 

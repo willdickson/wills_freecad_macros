@@ -102,12 +102,11 @@ def select_save_dir_dialog():
     """
     Opens dialog asking for the directory where the mujoco files will be saved.
     """
-    default_dir = QtCore.QDir.home().path()
-    default_dir = os.path.join(default_dir, 'tmp', 'a2plus_mujoco_test')
+    spreadsheet_save_dir = get_save_directory()
     save_to_dir = QtGui.QFileDialog.getExistingDirectory(
             parent = None, 
             caption = 'Select Save Directory', 
-            dir = default_dir, 
+            dir = spreadsheet_save_dir, 
             )
     return save_to_dir 
 
@@ -115,7 +114,6 @@ def select_save_dir_dialog():
 def get_mesh_file(base_name):
     mesh_file = f'{base_name}.stl'
     return mesh_file
-
 
 def create_mesh_files(part_info, file_info):
     """
@@ -452,6 +450,15 @@ def get_placement_base_vector(part_file, obj_label):
     return base_vector
 
 
+def get_placement_vector_in_assembly(part_info, part_label, obj_label):
+    part_obj = part_info[part_label]['part_obj']
+    src_file = part_info[part_label]['src_file']
+    base_vector = get_placement_base_vector(src_file, obj_label)
+    base_vector = part_obj.Placement.Rotation.multVec(base_vector)
+    base_vector = base_vector + part_obj.Placement.Base
+    return base_vector
+
+
 def get_placement_rotation(part_file, obj_label):
     """
     Get the rotataion specifying the object orientation of an object given a 
@@ -563,7 +570,19 @@ def load_mujoco_yaml_file(file_info):
         mujoco_data = yaml.safe_load(f)
     return mujoco_data
 
-
+def get_save_directory():
+    """
+    Get save directory from Spreadsheet
+    """
+    save_dir = App.ActiveDocument.Spreadsheet.get('SaveDirectory')
+    save_dir = os.path.expanduser(save_dir)
+    try:
+        os.makedirs(save_dir,exist_ok=True)
+    except OSError:
+        home_dir = QtCore.QDir.home().path()
+        save_dir = os.path.join(home_dir, 'tmp', 'mujoco_model')
+    return save_dir
+    
 def get_base_name(src_file):
     """
     Get base name of file - filename without the file extension.
@@ -600,6 +619,13 @@ mujoco_info = load_mujoco_yaml_file(file_info)
 #fc_print(file_info)
 #fc_print(part_info)
 #fc_print(mujoco_info)
+
+#p1 = get_placement_vector_in_assembly(part_info, 'sla_001', 'Ax4BallCutoutDatumPoint')
+#p2 = get_placement_vector_in_assembly(part_info, 'ax1_and_vein_001', 'Ax3BallCenterDatumPoint')
+#dist_p1_p2 = p1.distanceToPoint(p2)
+#fc_print(p1)
+#fc_print(p2)
+#fc_print(dist_p1_p2)
 
 # Create mesh files for all parts in the assembly
 if 1:

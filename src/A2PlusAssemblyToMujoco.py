@@ -46,6 +46,7 @@ FLOOR_ATTRIB = {
         'type'     : 'plane',  
         'material' : 'grid',  
         'condim'   : '3', 
+        'pos'      : '0.0 0.0 -500.0',
         }
 
 GRID_TEXTURE_ATTRIB = { 
@@ -54,8 +55,8 @@ GRID_TEXTURE_ATTRIB = {
         'builtin' : 'checker',  
         'width'   : '512',  
         'height'  : '512',  
-        'rgb1'    : '0.1 0.2 0.3',  
-        'rgb2'    : '0.2 0.3 0.4', 
+        'rgb1'    : '0.0 0.0 0.0',  
+        'rgb2'    : '0.8 0.8 0.8', 
         }
 
 GRID_MATERIAL_ATTRIB = { 
@@ -120,6 +121,16 @@ def create_mesh_files(part_info, file_info):
     Creates an stl file for each part in the part_info and saves it to the
     sub-directory MESH_FILE_DIR of the saveto_dir in the file_info. 
     """
+
+    create_mesh_str = App.ActiveDocument.Spreadsheet.get('CreateMeshFiles')
+    if create_mesh_str.lower() == 'true':
+        create_mesh_flag = True
+    else:
+        create_mesh_flag = False
+    print(f'create_mesh_flag = {create_mesh_flag}')
+    if not create_mesh_flag:
+        return
+
     mesh_dir = file_info['mesh_dir']
     os.makedirs(mesh_dir, exist_ok=True)
 
@@ -164,6 +175,7 @@ def create_mujoco_xml_file(part_info, file_info, mujoco_info):
     add_assets(root_elem, part_info, mujoco_info)
     add_bodies(root_elem, part_info, file_info, mujoco_info)
     add_equalities(root_elem, part_info, file_info, mujoco_info)
+    add_contacts(root_elem, part_info, file_info, mujoco_info)
     add_actuators(root_elem, part_info, mujoco_info)
 
     # Save mujoco model to pretty printed xml file
@@ -407,6 +419,23 @@ def add_equalities(root_elem, part_info, file_info, mujoco_info):
         ET.SubElement(equality_elem, equality_tag, attrib=equality_attrib )
 
 
+def add_contacts(root_elem, part_info, file_info, mujoco_info):
+    if not 'contact' in mujoco_info:
+        return
+    contact_elem = ET.SubElement(root_elem, 'contact')
+    for contact_info in mujoco_info['contact']:
+        contact_tag = contact_info['type']
+        contact_attrib = {}
+        try:
+            param_info = contact_info['parameters']
+        except KeyError:
+            pass
+        else:
+            for k, v in param_info.items():
+                contact_attrib[k] = convert_value_to_mujoco_xml(v)
+        ET.SubElement(contact_elem, contact_tag, attrib=contact_attrib )
+
+
 def add_actuators(root_elem, part_info, mujoco_info):
     if not 'actuator' in mujoco_info:
         return
@@ -615,6 +644,8 @@ fc_print(msg)
 file_info = get_file_info()
 part_info = get_part_info()
 mujoco_info = load_mujoco_yaml_file(file_info)
+create_mesh_files(part_info, file_info)
+create_mujoco_xml_file(part_info, file_info, mujoco_info)
 
 #fc_print(file_info)
 #fc_print(part_info)
@@ -627,9 +658,4 @@ mujoco_info = load_mujoco_yaml_file(file_info)
 #fc_print(p2)
 #fc_print(dist_p1_p2)
 
-# Create mesh files for all parts in the assembly
-if 1:
-    create_mesh_files(part_info, file_info)
-
-create_mujoco_xml_file(part_info, file_info, mujoco_info)
 

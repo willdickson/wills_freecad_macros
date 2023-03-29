@@ -377,6 +377,15 @@ def add_bodies(root_elem, part_info, file_info, mujoco_info):
                                     axis_vector = FreeCAD.Vector(v)
                                 axis_vector = parent_rot.multVec(axis_vector)
                                 body_joint_attrib['axis'] = vector_to_str(axis_vector)
+                            elif k == 'pos':
+                                if type(v) == str: 
+                                    pos_vector = get_placement_base_vector(parent_src_file, v)
+                                else:
+                                    pos_vector = FreeCAD.Vector(v)
+                                pos_vector = parent_rot.multVec(pos_vector)
+                                body_joint_attrib['pos'] = vector_to_str(pos_vector)
+                                    
+
                             else:
                                 body_joint_attrib[k] = convert_value_to_mujoco_xml(v)
                     ET.SubElement(body_elem, 'joint', attrib=body_joint_attrib)

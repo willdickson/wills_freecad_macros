@@ -46,7 +46,7 @@ FLOOR_ATTRIB = {
         'type'     : 'plane',  
         'material' : 'grid',  
         'condim'   : '3', 
-        'pos'      : '0.0 0.0 -500.0',
+        'pos'      : '0.0 0.0 0.0',
         }
 
 GRID_TEXTURE_ATTRIB = { 
@@ -116,6 +116,7 @@ def get_mesh_file(base_name):
     mesh_file = f'{base_name}.stl'
     return mesh_file
 
+
 def create_mesh_files(part_info, file_info):
     """
     Creates an stl file for each part in the part_info and saves it to the
@@ -127,7 +128,7 @@ def create_mesh_files(part_info, file_info):
         create_mesh_flag = True
     else:
         create_mesh_flag = False
-    print(f'create_mesh_flag = {create_mesh_flag}')
+    fc_print(f'create_mesh_flag = {create_mesh_flag}')
     if not create_mesh_flag:
         return
 
@@ -245,9 +246,9 @@ def add_bodies(root_elem, part_info, file_info, mujoco_info):
     ET.SubElement(worldbody_elem, 'geom', attrib=floor_attrib)
 
     # Add light
-    xpos = 1.5*xmax
-    ypos = 1.5*ymax
-    zpos = 1.5*zmax
+    xpos = 0.0*xmax
+    ypos = 0.0*ymax
+    zpos = 100.0*zmax
     cutoff = 2*max([xmax, ymax, zmax])
     light_attrib = dict(LIGHT_ATTRIB)
     light_attrib['pos'] = f'{xpos} {ypos} {zpos}'

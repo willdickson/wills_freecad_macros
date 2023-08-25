@@ -56,6 +56,8 @@ column_b_list = get_column_list('B', cells_list)
 for a_cell in column_a_list:
     a_address = a_cell.attrib['address']
     a_content = a_cell.attrib['content']
+    if a_content[0] == '\'':
+        a_content = a_content[1:]
     a_row = get_row_from_address(a_address)
     for b_cell in column_b_list:
         b_address = b_cell.attrib['address']
